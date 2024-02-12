@@ -6,6 +6,7 @@ from lxml import html
 from googlesearch import search
 from bs4 import BeautifulSoup
 import re
+import json
 import time
 
 # to search
@@ -98,7 +99,7 @@ def get_top_search_result(query):
         )
 
         if len(chars_without_whitespace) > 0:
-            result = first_sentence
+            result = article_text
         else:
             result = fallback
 
@@ -120,7 +121,7 @@ utility_tokens = {'Utility:5': 5, 'Utility:4': 4, 'Utility:3': 3, 'Utility:2': 2
 retrieval_tokens = {'No Retrieval': 0, 'Retrieval': 1}
 
 class Prediction:
-  def __init__(self, text, passage):
+  def __init__(self, text, passage, pred_obj):
       
     tokens = re.findall(r'\[(.*?)\]', text)
     self.text = text
@@ -128,6 +129,7 @@ class Prediction:
     self.relevant_score = 0
     self.support_score = 0
     self.utility_score = 0
+    self.pred_obj = pred_obj
 
     for token in tokens:
       if token in relevant_tokens:
@@ -152,9 +154,9 @@ def format_prompt(input, paragraph=None):
   return prompt
 
 def get_best_prediction_compose(preds, passages):
-  best_prediction = Prediction(preds[0].outputs[0].text, 0)
+  best_prediction = Prediction(preds[0].outputs[0].text, 0, preds[0])
   for id, pred in enumerate(preds):
-    prediction = Prediction(pred.outputs[0].text, passages[id])
+    prediction = Prediction(pred.outputs[0].text, passages[id], pred)
 
     if(best_prediction.get_score() < prediction.get_score()):
         best_prediction = prediction
@@ -173,7 +175,7 @@ def get_best_prediction(predictions: list[Prediction]):
 
 # Start Script
 model = LLM("selfrag/selfrag_llama2_7b", download_dir="/gscratch/h2lab/akari/model_cache", dtype="half")
-sampling_params = SamplingParams(temperature=0.4, top_p=1.0, max_tokens=100, skip_special_tokens=False)
+sampling_params = SamplingParams(temperature=0.4, top_p=1.0, max_tokens=100, skip_special_tokens=False, logprobs=2, prompt_logprobs=2)
 
 start_time = time.time()
 prompt = 'how many students are at utsa?'
@@ -186,7 +188,8 @@ if(len(results ) < 1):
 
 
 for result in results:
-  print(result)
+  result = r"Office of Institutional Research and Analysis.Overall, enrollment is up 5% from pre-pandemic figures, when 32,594 students were enrolled in fall 2019. First-time freshman enrollment also increased 1.8% to a record 5,600, as more college-bound students choose UTSA to pursue their bold futures.“UTSA has been successful in maintaining our enrollment gains during the pandemic thanks to strategic planning and a deliberate focus on increasing financial aid,” said Kimberly Andrews Espy, UTSA provost and senior vice president of academic affairs. Of particular note is a 41% surge in online enrollment from fall 2021. The university now has nearly 790 students enrolled in seven fully online degree and certificate programs. Eighty-five percent of online students are undergraduates. Other highlights: More than 1,170 students are entering UTSA as part of the university’s Bold Promise Program, the largest cohort to date. Raising the Bold Promise family income eligibility threshold to $70,000, made possible by UT System’s Promise Plus endowment, enabled more students to enroll through the Bold Promise Program. Additionally, UTSA is injecting an additional $2 million per year into financial aid from an endowment created from a $40 million gift to the university by philanthropist MacKenzie Scott.Nearly 77% of new Bold Promise students are Hispanic, and 39.8% are from Bexar County, reflecting the university’s commitment as an urban serving institution that provides high-quality, affordable education to students from the greater San Antonio community. More Bold Promise students are taking advantage of all UTSA has to offer by living on campus, as well. More than 46% of new Bold Promise students are living in on-campus housing, up from 22% in fall 2020. The increase is due in part to the university’s new Bold Scholar program, a comprehensive on-campus living-learning experience that is providing housing scholarships to 220 students.The university’s transfer student enrollment is 2,900 this fall, down from fall 2021 and consistent with declines in transfer student enrollment across the country following the COVID-19 pandemic.In addition to these enrollment figures, UTSA posted notable progress in several key student success metrics. In the last five years, degrees awarded has grown by 16% overall. Five-year growth in undergraduate degrees is 18%, from 4,938 in 2017-2018 to 5,834 in 2021-2022."
+  # print(result)
   passages = [result[i:i+1500] for i in range(0, len(result), 1500)]
   print('Num Result Parts: ', len(passages))
 
@@ -195,13 +198,28 @@ for result in results:
   preds = model.generate([format_prompt(prompt, paragraph=passage) for passage in passages], sampling_params)
   best_predictions.append(get_best_prediction_compose(preds, passages))
 
+  # preds[0].outputs[0].logprobs.
+  # preds[0].prompt_logprobs
+  print("Prompt Probs: ", preds[0].prompt_logprobs)
+  print("Output Probs: ", [pred.outputs[0].logprobs for pred in preds])
+  break
 
+
+  
 
 if(len(best_predictions) <= 0):
   print("No predictions found")
   exit()
 
 best_prediction = get_best_prediction(best_predictions)
+final_results = {"prompt_tok": best_prediction.pred_obj.prompt_token_ids, "prompt_probs": best_prediction.pred_obj.prompt_logprobs,
+                  "output_tok": best_prediction.pred_obj.outputs[0].token_ids, "output_probs": best_prediction.pred_obj.outputs[0].logprobs}
+
+print("Output Probs: ", best_prediction.pred_obj.outputs[0].logprobs)
+print("Prompt Probs: ", best_prediction.pred_obj.prompt_logprobs)
+
+with open("test.json", "w") as outfile:
+        json.dump(final_results, outfile)
 
 end_time = time.time()
 execution_time = end_time - start_time
@@ -209,26 +227,3 @@ execution_time = end_time - start_time
 print("Passage Cited:", passages[best_prediction.passage])
 print(best_prediction.text)
 print("Execution time:", execution_time, "seconds")
-
-
-
-# code to get a string of input from user in the terminal
-
-# code to get a string of input from user in the terminal
-# 
-# input = input("Enter prompt: ")
-
-
-# result = get_top_search_result('what is python')
-# result_parts = [result[i:i+1500] for i in range(0, len(result), 1500)]
-# # result = result.split()
-# preds = model.generate([format_prompt(query) for query in queries], sampling_params)
-# for pred in preds:
-#   print("Model prediction: {0}".format(pred.outputs[0].text))
-
-# # result = chatbot_query('what is python')
-# print(len(result_parts))
-# print(result_parts)
-# while(input != "exit"):
-
-#   input = input("Enter prompt: ")
